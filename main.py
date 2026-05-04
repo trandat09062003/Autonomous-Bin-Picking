@@ -78,13 +78,13 @@ class GraspController:
         # TODO deal with situations when path not found
         if set_orientation:
             path = self.env._robot.arm.get_path(pose[:3], quaternion=pose[3:],
-                                                ignore_collisions=True, algorithm=Algos.RRTConnect, trials=1000)
+                                                ignore_collisions=True, algorithm=Algos.RRTConnect, trials=300)
         else:
             path = self.env._robot.arm.get_path(pose[:3], quaternion=np.array([0, 1, 0, 0]),
-                                                ignore_collisions=True, algorithm=Algos.RRTConnect, trials=1000)
+                                                ignore_collisions=True, algorithm=Algos.RRTConnect, trials=300)
         return path
 
-    def grasp(self):
+    def grasp(self, target_obj=None):
         # TODO get feedback to check if grasp is successfull
         done_grab_action = False
         # Repeat unitil successfully grab the object
@@ -92,33 +92,78 @@ class GraspController:
             # gradually close the gripper
             done_grab_action = self.env._robot.gripper.actuate(0, velocity=0.2)  # 0 is close
             self.env._pyrep.step()
-            # self.task._task.step()
-            # self.env._scene.step()
 
         grasped_objects = {}
-        obj_list = ['Shape', 'Shape1', 'Shape3']
+        # Get all objects in the scene to check which one is detected by proximity sensor
         objs = self.env._scene._active_task.get_base().get_objects_in_tree(exclude_base=True, first_generation_only=False)
-        for obj in objs:
-            if obj.get_name() in obj_list:
-                grasped_objects[obj.get_name()] = self.env._robot.gripper.grasp(obj)
+        
+        # If a specific target is provided, try to grasp it first
+        if target_obj:
+            success = self.env._robot.gripper.grasp(target_obj)
+            if success:
+                grasped_objects[target_obj.get_name()] = True
+        
+        # ONLY if no specific target was provided or first attempt failed, 
+        # try to find any small shape nearby (fallback logic)
+        if len(grasped_objects) == 0:
+            for obj in objs:
+                name = obj.get_name()
+                if 'Shape' in name and name not in grasped_objects:
+                    # Check distance to gripper to avoid grasping far away objects
+                    dist = np.linalg.norm(obj.get_position() - self.env._robot.gripper.get_position())
+                    if dist < 0.05: # Only grasp if within 5cm
+                        success = self.env._robot.gripper.grasp(obj)
+                        if success:
+                            grasped_objects[name] = True
+                    
+        # Step simulation to update visuals and physics immediately
+        for _ in range(5):
+            self.env._pyrep.step()
+        
         return grasped_objects
         # return self.env._robot.gripper.get_grasped_objects()
 
     def release(self):
+        # Get list of grasped objects before releasing
+        grasped_objs = self.env._robot.gripper.get_grasped_objects()
+        
         done = False
         while not done:
             done = self.env._robot.gripper.actuate(1, velocity=0.2)  # 1 is release
             self.env._pyrep.step()
-            # self.task._task.step()
-            # self.env._scene.step()
+            
         self.env._robot.gripper.release()
+        
+        # Explicitly enable dynamics and wait for objects to fall
+        for obj in grasped_objs:
+            if obj.still_exists():
+                obj.set_dynamic(True)
+        
+        # Step simulation to let objects fall
+        for _ in range(20):
+            self.env._pyrep.step()
+            self.task._task.step() # Update task status (detect success)
 
     def execute_path(self, path, open_gripper=True):
-        path = path._path_points.reshape(-1, path._num_joints)
-        for i in range(len(path)):
-            action = list(path[i]) + [int(open_gripper)]
-            obs, reward, terminate = self.task.step(action)
-        return obs, reward, terminate
+        path_points = path._path_points.reshape(-1, path._num_joints)
+        for i in range(len(path_points)):
+            joint_positions = path_points[i]
+            # Set target positions
+            self.env._robot.arm.set_joint_target_positions(joint_positions)
+            
+            # Wait for joints to reach target
+            reached = False
+            max_steps = 100 # Safety timeout for each point
+            steps = 0
+            while not reached and steps < max_steps:
+                self.env._pyrep.step()
+                cur_positions = self.env._robot.arm.get_joint_positions()
+                reached = np.allclose(cur_positions, joint_positions, atol=0.005) # Increased precision
+                steps += 1
+                time.sleep(0.01) # Small delay to slow down and reduce lag
+                
+        # Return observation after completing the path
+        return self.task.get_observation(), 0, False
 
         ### The following codes can work as well ###
         # done = False

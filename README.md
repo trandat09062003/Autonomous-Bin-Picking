@@ -1,102 +1,58 @@
-# Autonomous Bin Picking (Deployed)
+# Autonomous Bin-Picking with Franka Panda & RLBench
 
-This repository contains an autonomous bin-picking project built using **RLBench**, **PyRep (CoppeliaSim)**, and **GQCNN**.
-Due to the age of the original dependencies (~2021), the environment setup requires specific older versions of libraries and Python 3.6 to function correctly.
+Dự án này triển khai hệ thống gắp vật thể tự động (Bin-Picking) sử dụng cánh tay robot Franka Emika Panda trong môi trường mô phỏng RLBench. Hệ thống kết hợp Deep Learning cho thị giác máy tính và thuật toán lập kế hoạch quỹ đạo để tối ưu hóa quá trình gắp thả vật thể giữa các thùng chứa.
 
-## 🚀 Quick Start: Hardcoded Grasping Demo
-If you have completed the environment setup, you can run the hardcoded grasping demo to see the robot in action (bypassing the missing GQCNN models):
-
-```bash
-cd Autonomous-Bin-Picking
-python demo_grasp.py
-```
-*This script will launch the RLBench environment, find an object, pick it up, drop it in the red container, and save screenshots (`scene_before.png` and `wrist_grasping.png`).*
+## 🌟 Các cải tiến chính so với bản gốc
+So với phiên bản gốc, hệ thống này đã được tối ưu hóa đáng kể về độ tin cậy:
+- **Cơ chế thử lại thông minh (Smart Retry):** Tự động thay đổi góc tiếp cận (Orientation) và độ sâu gắp (Depth) nếu lần gắp đầu tiên thất bại.
+- **Xác thực đa tầng (Multi-layer Verification):** Kiểm tra trạng thái vật thể ngay sau khi kẹp và sau khi nhấc lên để đảm bảo không bị rơi giữa chừng.
+- **Tối ưu hóa quỹ đạo:** Sử dụng RRT với tham số tinh chỉnh để tránh va chạm với thành thùng chứa.
 
 ---
 
-## 🛠 Detailed Installation Guide
+## 🛠️ Quy trình hoạt động của dự án
 
-The installation is complex and must be done in a **Conda Python 3.6** environment.
+### 1. Thu thập dữ liệu (Data Collection)
+Hệ thống sử dụng file `data_collector.py` để tự động hóa việc thu thập dữ liệu huấn luyện:
+- Robot di chuyển đến các vị trí quan sát phía trên thùng chứa.
+- Camera gắn trên cổ tay (Wrist Camera) chụp ảnh RGB và ảnh độ sâu (Depth).
+- Dữ liệu được gán nhãn tự động dựa trên trạng thái của thùng (trống hoặc có vật thể) để tạo Dataset cho mạng phân loại.
 
-### 1. Prerequisites
-You need **Conda** and **Ubuntu 20.04/22.04**.
+### 2. Tự học và Nhận diện (Learning & Perception)
+Quá trình "tự học" của Agent diễn ra qua hai thành phần chính:
+- **Phân loại trạng thái (Container Detection):** Sử dụng mạng **ResNet-18** (trong `object_detector.py`) được huấn luyện để nhận diện thùng chứa có trống hay không. Điều này giúp Agent quyết định khi nào cần gắp và khi nào hoàn thành nhiệm vụ.
+- **Kế hoạch gắp (Grasp Planning):** Sử dụng **GQCNN 2.0** (Grasp Quality Convolutional Neural Network). Đây là một Agent đã được học từ hàng triệu mẫu gắp giả lập để dự đoán "Chất lượng điểm gắp" (Grasp Quality) từ ảnh độ sâu. Agent sẽ chọn điểm có điểm số cao nhất để thực hiện.
 
-Create a new isolated environment:
-```bash
-conda create -n bin_picking python=3.6
-conda activate bin_picking
-```
-
-### 2. Install CoppeliaSim (PyRep Dependency)
-PyRep requires CoppeliaSim V4.1.0 to function.
-
-```bash
-# Download and extract CoppeliaSim V4.1.0 Ubuntu 20.04
-wget -qO- https://downloads.coppeliarobotics.com/V4_1_0/CoppeliaSim_Edu_V4_1_0_Ubuntu20_04.tar.xz | tar -xJ
-
-# Set Environment Variables (Add these to your ~/.bashrc or a setup script)
-export COPPELIASIM_ROOT=$(pwd)/CoppeliaSim_Edu_V4_1_0_Ubuntu20_04
-export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$COPPELIASIM_ROOT
-export QT_QPA_PLATFORM_PLUGIN_PATH=$COPPELIASIM_ROOT
-```
-
-### 3. Clone Compatible Versions of Dependencies
-Since the original project was built around 2020-2021, you MUST use older commits of the dependencies.
-
-```bash
-# Clone PyRep and RLBench
-git clone https://github.com/stepjam/PyRep.git
-git clone https://github.com/stepjam/RLBench.git
-
-# Clone GQCNN and Perception
-git clone https://github.com/BerkeleyAutomation/gqcnn.git
-git clone https://github.com/BerkeleyAutomation/perception.git
-
-# Checkout compatible versions
-cd RLBench && git checkout 1.1.0 && cd ..
-cd gqcnn && git checkout `git log --before="2020-12-31" -n 1 --format="%H"` && cd ..
-cd perception && git checkout `git log --before="2020-12-31" -n 1 --format="%H"` && cd ..
-```
-
-### 4. Install Dependencies
-Install them in the exact order below:
-
-```bash
-# Install PyRep
-cd PyRep
-pip install .
-
-# Install RLBench
-cd ../RLBench
-pip install .
-
-# Install GQCNN & Perception
-cd ../gqcnn
-pip install .
-cd ../perception
-pip install -e .
-```
-
-### 5. Fix Dependency Conflicts (Important)
-Python 3.6 is deprecated, so modern pip wheels will fail to build (especially OpenCV and PyTorch). Run these commands to install compatible pre-compiled wheels:
-
-```bash
-# Fix OpenCV and PyTorch for Python 3.6
-pip uninstall -y opencv-python
-pip install opencv-python-headless==4.3.0.38
-pip install torch==1.10.2+cpu torchvision==0.11.3+cpu -f https://download.pytorch.org/whl/cpu/torch_stable.html
-pip install autolab_core
-```
-
-### 6. Install Project Requirements
-Finally, install the requirements for this specific repo:
-```bash
-cd Autonomous-Bin-Picking
-pip install -r requirements.txt
-```
+### 3. Thực thi (Execution)
+- **Perception:** Agent quan sát hiện trường từ Wrist Camera.
+- **Planning:** Nếu thùng không trống, GQCNN tính toán tọa độ gắp tối ưu.
+- **Control:** Robot sử dụng thuật toán **RRT (Rapidly-exploring Random Tree)** để lập kế hoạch quỹ đạo di chuyển từ vị trí hiện tại đến điểm gắp mà không va chạm.
+- **Robustness:** Sau khi gắp, hệ thống kiểm tra cảm biến lực/proximity để xác nhận vật đã nằm trong ngàm kẹp trước khi di chuyển sang thùng đích.
 
 ---
 
-## 🛑 Known Issues
-- **GQCNN Models Unavailable**: The original `main.py` relies on pre-trained GQCNN weights hosted on Berkeley's Box servers. Those links are currently dead (returning 404). Therefore, `main.py` will crash looking for `models/GQCNN-2.0/config.json`. To run it, you must manually source and place the GQCNN-2.0 weights in the `models/` directory. Use `demo_grasp.py` instead for testing.
-- **Qt GUI Warnings**: If you see `QObject::~QObject: Timers cannot be stopped from another thread` at exit, it's a harmless Qt garbage collection warning and can be ignored (we bypass it in `demo_grasp.py` using `os._exit(0)`).
+## 📁 Cấu trúc thư mục chính
+- `auto_grasp.py`: Script chính điều khiển toàn bộ quy trình gắp thả tự động.
+- `main.py`: Chứa lớp `GraspController` điều phối môi trường và robot.
+- `grasp_planner.py`: Wrapper cho model GQCNN để dự đoán điểm gắp.
+- `object_detector.py`: Định nghĩa và huấn luyện mạng ResNet phân loại thùng chứa.
+- `data_collector.py`: Công cụ thu thập dữ liệu ảnh từ mô phỏng.
+- `models/`: Chứa các trọng số đã huấn luyện (GQCNN, ResNet).
+
+---
+
+## 🚀 Hướng dẫn cài đặt
+
+1. **Yêu cầu hệ thống:** Python 3.6, CoppeliaSim, PyRep, RLBench.
+2. **Cài đặt dependencies:**
+   ```bash
+   pip install -r requirements.txt
+   ```
+3. **Cài đặt thư viện Perception & GQCNN:** Theo hướng dẫn từ Berkeley Automation Lab.
+4. **Chạy hệ thống:**
+   ```bash
+   python auto_grasp.py
+   ```
+
+---
+*Dự án được phát triển và tối ưu hóa bởi trandat09062003.*

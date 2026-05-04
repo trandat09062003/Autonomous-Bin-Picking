@@ -58,10 +58,11 @@ if target_obj_name:
     
     # 2. Move down to grasp
     grasp_pose = np.copy(target_pose)
-    grasp_pose[2] += 0.02 # Slightly above the center of the object
+    grasp_pose[2] += 0.01 # Lowered from 0.02 to 0.01 to ensure proximity sensor triggers
     grasp_pose[3:] = grasping_quaternion
     print("Moving down to grasp...")
-    path = grasp_controller.get_path(grasp_pose, set_orientation=True)
+    # Use non-linear path to avoid collisions with bin walls
+    path = grasp_controller.env._robot.arm.get_path(grasp_pose[:3], quaternion=grasp_pose[3:], ignore_collisions=False)
     obs, _, _ = grasp_controller.execute_path(path, open_gripper=True)
     
     # Save wrist image
@@ -72,7 +73,8 @@ if target_obj_name:
     
     # 3. Close gripper
     print("Closing gripper...")
-    grasped = grasp_controller.grasp()
+    target_obj = objs[target_obj_name][0]
+    grasped = grasp_controller.grasp(target_obj)
     print(f"Grasp status: {grasped}")
     
     # 4. Move up
